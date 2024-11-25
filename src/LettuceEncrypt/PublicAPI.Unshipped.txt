@@ -1,1 +1,9 @@
 #nullable enable
+LettuceEncrypt.Acme.CloudflareDnsOptions
+LettuceEncrypt.Acme.CloudflareDnsOptions.CloudflareDnsOptions() -> void
+LettuceEncrypt.Acme.CloudflareDnsOptions.Key.get -> string!
+LettuceEncrypt.Acme.CloudflareDnsOptions.Key.set -> void
+LettuceEncrypt.Acme.CloudflareDnsOptions.ZoneId.get -> string!
+LettuceEncrypt.Acme.CloudflareDnsOptions.ZoneId.set -> void
+Microsoft.Extensions.DependencyInjection.CloudflareLettuceEncryptExtensions
+static Microsoft.Extensions.DependencyInjection.CloudflareLettuceEncryptExtensions.CloudflareDnsChallenge(this LettuceEncrypt.ILettuceEncryptServiceBuilder! builder) -> LettuceEncrypt.ILettuceEncryptServiceBuilder!

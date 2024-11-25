@@ -74,6 +74,13 @@ public static class LettuceEncryptServiceCollectionExtensions
             return new ConfigureOptions<LettuceEncryptOptions>(options => config?.Bind("LettuceEncrypt", options));
         });
 
+        services.AddSingleton<IConfigureOptions<CloudflareDnsOptions>>(s =>
+        {
+            var config = s.GetService<IConfiguration?>();
+            return new ConfigureOptions<CloudflareDnsOptions>(options =>
+                config?.Bind("LettuceEncrypt:Cloudflare", options));
+        });
+
         services.Configure(configure);
 
         // The state machine should run in its own scope
