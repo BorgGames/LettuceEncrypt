@@ -88,6 +88,9 @@ internal abstract class DomainOwnershipValidator
         _logger.LogError("Failed to validate ownership of domainName '{domainName}'. Reason: {reason}", domainName,
             reason);
 
-        return new InvalidOperationException($"Failed to validate ownership of domainName '{domainName}'");
+        return new InvalidOperationException($"Failed to validate ownership of domainName '{domainName}'")
+        {
+            HResult = (int)authorization.Status!.Value,
+        };
     }
 }

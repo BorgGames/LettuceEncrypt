@@ -30,22 +30,38 @@ internal class Dns01DomainValidator : DomainOwnershipValidator
         CancellationToken cancellationToken
     )
     {
-        var context = new DnsTxtRecordContext(_domainName, string.Empty);
-        try
+        var validationDelay = TimeSpan.Zero;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        while (true)
         {
-            context = await PrepareDns01ChallengeResponseAsync(authzContext, _domainName, cancellationToken);
-            await WaitForChallengeResultAsync(authzContext, cancellationToken);
-        }
-        finally
-        {
-            // Cleanup
-            await _dnsChallengeProvider.RemoveTxtRecordAsync(context, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var context = new DnsTxtRecordContext(_domainName, string.Empty);
+            try
+            {
+                stopwatch.Restart();
+                context = await PrepareDns01ChallengeResponseAsync(authzContext, _domainName, validationDelay,
+                    cancellationToken);
+                validationDelay += stopwatch.Elapsed;
+                await WaitForChallengeResultAsync(authzContext, cancellationToken);
+                return;
+            }
+            catch (InvalidOperationException e) when (e.HResult == (int)AuthorizationStatus.Invalid)
+            {
+                _logger.LogWarning(e, "DNS challenge failed, assuming due to propagation issue, will retry");
+            }
+            finally
+            {
+                // Cleanup
+                await _dnsChallengeProvider.RemoveTxtRecordAsync(context, cancellationToken);
+            }
         }
     }
 
     private async Task<DnsTxtRecordContext> PrepareDns01ChallengeResponseAsync(
         IAuthorizationContext authorizationContext,
         string domainName,
+        TimeSpan validationDelay,
         CancellationToken cancellationToken
     )
     {
@@ -59,6 +75,13 @@ internal class Dns01DomainValidator : DomainOwnershipValidator
         var acmeDomain = GetAcmeDnsDomain(domainName);
 
         var context = await _dnsChallengeProvider.AddTxtRecordAsync(acmeDomain, dnsTxt, cancellationToken);
+
+        if (validationDelay > TimeSpan.Zero)
+        {
+            _logger.LogTrace("Waiting for {delay} before validating DNS challenge due to previous failure",
+                validationDelay);
+            await Task.Delay(validationDelay, cancellationToken);
+        }
 
         _logger.LogTrace("Requesting server to validate DNS challenge");
         await _client.ValidateChallengeAsync(dnsChallenge);
