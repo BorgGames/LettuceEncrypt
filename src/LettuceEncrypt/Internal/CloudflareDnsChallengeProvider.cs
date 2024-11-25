@@ -1,9 +1,11 @@
 // Copyright (c) Nate McMaster.
 // Licensed under the Apache License, Version 2.0. See License.txt in the project root for license information.
 
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using LettuceEncrypt.Acme;
+using LettuceEncrypt.Internal.Dns;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -72,6 +74,32 @@ internal sealed class CloudflareDnsChallengeProvider : IDnsChallengeProvider, ID
         _logger.LogInformation("Added TXT record for domain {DomainName} in {Zone} with value {Txt}",
             domainName, _options.Value.ZoneId, txt);
 
+        var context = new DnsTxtRecordContext(domainName: domainName, txt: txt);
+        while (await GetRecordId(context, ct) is null)
+        {
+            _logger.LogDebug("Waiting for {Txt} for {DomainName} in {Zone} to be ready",
+                txt, domainName, _options.Value.ZoneId);
+            await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
+        }
+
+        var dnsServer = IPAddress.Parse("8.8.8.8");
+        while (true)
+        {
+            var records = await DnsTxtRecordRetriever.GetTxtRecords(domainName, dnsServer, ct);
+            if (records.Contains(txt))
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(300), ct);
+            _logger.LogDebug("Waiting for {Txt} for {DomainName} in {Zone} to be visible",
+                txt, domainName, _options.Value.ZoneId);
+        }
+
+
+        _logger.LogInformation("TXT record for domain {DomainName} in {Zone} with value {Txt} seems to be ready",
+            domainName, _options.Value.ZoneId, txt);
+
         return new DnsTxtRecordContext(domainName, txt);
     }
 
@@ -80,14 +108,41 @@ internal sealed class CloudflareDnsChallengeProvider : IDnsChallengeProvider, ID
         if (context == null)
             throw new ArgumentNullException(nameof(context));
 
+        if (string.IsNullOrEmpty(context.Txt))
+            return;
+
         _logger.LogInformation("Removing TXT record for domain {DomainName} in {Zone} with value {Txt}",
             context.DomainName, _options.Value.ZoneId, context.Txt);
 
-        var relativeDomain = await GetRelativeDomainAsync(context.DomainName, ct);
+        var recordId = await GetRecordId(context, ct);
+        if (recordId is null)
+        {
+            throw new InvalidOperationException($"TXT record not found for domain {context.DomainName}");
+        }
 
+        // Delete the record
+        var deleteResponse = await _http.DeleteAsync(
+            $"{BaseUrl}/zones/{_options.Value.ZoneId}/dns_records/{recordId}",
+            ct
+        );
+
+        if (!deleteResponse.IsSuccessStatusCode)
+        {
+            var errorContent = await deleteResponse.Content.ReadAsStringAsync(ct);
+            throw new HttpRequestException(
+                $"Failed to delete TXT record. Status: {deleteResponse.StatusCode}, Error: {errorContent}"
+            );
+        }
+
+        _logger.LogInformation("Removed TXT record for domain {DomainName} in {Zone} with value {Txt}",
+            context.DomainName, _options.Value.ZoneId, context.Txt);
+    }
+
+    private async Task<string?> GetRecordId(DnsTxtRecordContext context, CancellationToken ct)
+    {
         // First, find the record ID
         var recordsResponse = await _http.GetAsync(
-            $"{BaseUrl}/zones/{_options.Value.ZoneId}/dns_records?type=TXT&name={relativeDomain}&content={context.Txt}",
+            $"{BaseUrl}/zones/{_options.Value.ZoneId}/dns_records?type=TXT&name={context.DomainName}&content={context.Txt}",
             ct
         );
 
@@ -107,27 +162,10 @@ internal sealed class CloudflareDnsChallengeProvider : IDnsChallengeProvider, ID
 
         if (record.ValueKind == JsonValueKind.Undefined)
         {
-            throw new InvalidOperationException($"TXT record not found for domain {context.DomainName}");
+            return null;
         }
 
-        var recordId = record.GetProperty("id").GetString();
-
-        // Delete the record
-        var deleteResponse = await _http.DeleteAsync(
-            $"{BaseUrl}/zones/{_options.Value.ZoneId}/dns_records/{recordId}",
-            ct
-        );
-
-        if (!deleteResponse.IsSuccessStatusCode)
-        {
-            var errorContent = await deleteResponse.Content.ReadAsStringAsync(ct);
-            throw new HttpRequestException(
-                $"Failed to delete TXT record. Status: {deleteResponse.StatusCode}, Error: {errorContent}"
-            );
-        }
-
-        _logger.LogInformation("Removed TXT record for domain {DomainName} in {Zone} with value {Txt}",
-            context.DomainName, _options.Value.ZoneId, context.Txt);
+        return record.GetProperty("id").GetString();
     }
 
     private async Task<string> GetRelativeDomainAsync(string domainName, CancellationToken ct = default)
